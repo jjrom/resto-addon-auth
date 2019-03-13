@@ -1,0 +1,13 @@
+'Auth' => array(
+    'options' => array(
+        'providers' => array(
+            'facebook' => array(),
+            'google' => array(),
+            'googlejwt' => array()
+        ),
+        'ssl' => array(
+            'verify_peer' => false,
+            'verify_peer_name' => false
+        )
+    )
+)
