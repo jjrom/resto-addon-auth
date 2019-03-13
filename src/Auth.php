@@ -169,7 +169,7 @@ class Auth extends RestoAddOn
     public function __construct($context, $user)
     {
         parent::__construct($context, $user);
-        $this->providers = $this->context->addons[get_class($this)]['providers'] ?? array();
+        $this->providers = $this->options['providers'] ?? array();
     }
 
     /**
