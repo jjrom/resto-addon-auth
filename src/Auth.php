@@ -379,9 +379,7 @@ class Auth extends RestoAddOn
     private function createUserInDatabase($profile, $provider)
     {
         try {
-            (new UsersFunctions($this->context->dbDriver))->getUserProfile(array(
-                'email' => strtolower($profile[$this->getEmailKey($provider)])
-            ));
+            (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile[$this->getEmailKey($provider)]));
         } catch (Exception $e) {
 
             /*
