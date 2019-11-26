@@ -32,6 +32,11 @@
 class Auth extends RestoAddOn
 {
 
+    /**
+     * Add-on version
+     */
+    public $version = '1.0';
+
     /*
      * Data
      */
