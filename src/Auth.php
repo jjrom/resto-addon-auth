@@ -509,7 +509,7 @@ class Auth extends RestoAddOn
         $restoProfile['name'] = trim(join(' ', array(ucfirst($restoProfile['firstname'] ?? ''), ucfirst($restoProfile['lastname'] ?? ''))));
 
         // Encode externalidp
-        $restoProfile['externalidp'] = json_encode($externalidp);
+        $restoProfile['externalidp'] = json_encode($externalidp, JSON_UNESCAPED_SLASHES);
 
         return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($restoProfile, array(
             'activated' => 1,
