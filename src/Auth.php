@@ -174,7 +174,6 @@ class Auth extends RestoAddOn
     public function __construct($context, $user)
     {
         parent::__construct($context, $user);
-        $this->providers = $this->options['providers'] ?? array();
     }
 
     /**
@@ -211,7 +210,7 @@ class Auth extends RestoAddOn
          */
         switch ($provider['protocol']) {
             case 'oauth2':
-                return $this->oauth2($params['issuerId'], $provider);
+                return $this->oauth2($provider);
             default:
                 RestoLogUtil::httpError(400, 'Unknown sso protocol for issuer "' . $params['issuerId'] . '"');
 
@@ -248,24 +247,23 @@ class Auth extends RestoAddOn
         /*
          * Return resto profile token
          */
-        return $this->token($profile, $provider);
+        return $this->tokenAndProfile($profile, $provider)['token'];
     }
 
     /**
      * Authenticate with generic Oauth2 API
      *
-     * @param string $issuerId
      * @param array $provider
      *
      * @return json
      */
-    private function oauth2($issuerId, $provider)
+    private function oauth2($provider)
     {
 
         /*
          * Step 1. Get access token
          */
-        $accessToken = $this->oauth2GetAccessToken($issuerId, $provider['accessTokenUrl']);
+        $accessToken = $this->oauth2GetAccessToken($provider);
 
         /*
          * Step 2. Get oauth profile
@@ -277,35 +275,32 @@ class Auth extends RestoAddOn
          */
         $this->createUserInDatabase($profile, $provider);
 
-        return array(
-            'token' => $this->token($profile, $provider)
-        );
+        return $this->tokenAndProfile($profile, $provider);
     }
 
     /**
      * Get OAuth2 access token
      *
-     * @param string $issuerId
-     * @param string $accessTokenUrl
+     * @param array $provider
      *
      * @return string
      */
-    private function oauth2GetAccessToken($issuerId, $accessTokenUrl)
+    private function oauth2GetAccessToken($provider)
     {
         if (!isset($this->data['code']) || !isset($this->data['redirectUri'])) {
             RestoLogUtil::httpError(400);
         }
 
-        $postResponse = json_decode(file_get_contents($accessTokenUrl, false, stream_context_create(array(
+        $postResponse = json_decode(file_get_contents($provider['accessTokenUrl'], false, stream_context_create(array(
             'http' => array(
                 'method' => 'POST',
                 'header' => 'Content-Type: application/x-www-form-urlencoded',
                 'content' => http_build_query(array(
                     'code' => $this->data['code'],
-                    'client_id' => $this->providers[$issuerId]['clientId'],
+                    'client_id' => $provider['clientId'],
                     'redirect_uri' => $this->data['redirectUri'],
                     'grant_type' => 'authorization_code',
-                    'client_secret' => $this->providers[$issuerId]['clientSecret']
+                    'client_secret' => $provider['clientSecret']
                 ))
             ),
             'ssl' => $this->options['ssl'] ?? array()
@@ -403,25 +398,24 @@ class Auth extends RestoAddOn
      */
     private function getProvider($issuerId)
     {
-        if (isset($this->providers[$issuerId])) {
-
-            /*
-             * Search for known providers first
-             */
-            if (isset($this->providersConfig[$issuerId])) {
-                $provider = $this->providersConfig[$issuerId];
-            } else {
-                $provider = $this->providers[$issuerId];
-            }
-        }
 
         /*
          * No provider => exit
          */
-        if (!isset($provider)) {
+        if ( !isset($this->options['providers']) || !isset($this->options['providers'][$issuerId])) {
             RestoLogUtil::httpError(400, 'No configuration found for issuer "' . $issuerId . '"');
         }
 
+       
+        /*
+         * Search for known providers first
+         */
+        if (isset($this->providersConfig[$issuerId])) {
+            $provider = array_merge($this->providersConfig[$issuerId], $this->options['providers'][$issuerId]);
+        } else {
+            $provider = $this->options['providers'][$issuerId];
+        }
+       
         return $provider;
     }
 
@@ -432,7 +426,7 @@ class Auth extends RestoAddOn
      * @param Array $provider
      * @return json
      */
-    private function token($profile, $provider)
+    private function tokenAndProfile($profile, $provider)
     {
         $emailKey = $this->getEmailKey($provider);
 
@@ -445,13 +439,19 @@ class Auth extends RestoAddOn
 
         // User exists => return JWT
         if (isset($user) && isset($user->profile['id'])) {
-            return $this->context->createRJWT($user->profile['id']);
+            return array(
+                'token' => $this->context->createRJWT($user->profile['id']),
+                'profile' => $user->profile
+            );
         }
 
         // User does not exist => Special case - create it
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
             $restoProfile = $this->storeUser($profile, $provider);
-            return $this->context->createRJWT($restoProfile['id']);
+            return array(
+                'token' => $this->context->createRJWT($restoProfile['id']),
+                'profile' => $restoProfile
+            );
         }
 
         return RestoLogUtil::httpError(401, 'Unauthorized');
