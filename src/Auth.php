@@ -43,11 +43,6 @@ class Auth extends RestoAddOn
     private $data = array();
 
     /*
-     * Identity providers
-     */
-    private $providers = array();
-
-    /*
      * Known providers configuration
      */
     private $providersConfig = array(
@@ -204,7 +199,7 @@ class Auth extends RestoAddOn
          * Get provider
          */
         $provider = $this->getProvider($params['issuerId']);
-
+        
         /*
          * Authenticate from input protocol
          */
@@ -291,22 +286,27 @@ class Auth extends RestoAddOn
             RestoLogUtil::httpError(400);
         }
 
-        $postResponse = json_decode(file_get_contents($provider['accessTokenUrl'], false, stream_context_create(array(
-            'http' => array(
-                'method' => 'POST',
-                'header' => 'Content-Type: application/x-www-form-urlencoded',
-                'content' => http_build_query(array(
-                    'code' => $this->data['code'],
-                    'client_id' => $provider['clientId'],
-                    'redirect_uri' => $this->data['redirectUri'],
-                    'grant_type' => 'authorization_code',
-                    'client_secret' => $provider['clientSecret']
-                ))
-            ),
-            'ssl' => $this->options['ssl'] ?? array()
-        ))), true);
+        try {
+            $curl = new Curly();
+            $params = array(
+                'code' => $this->data['code'],
+                'client_id' => $provider['clientId'],
+                'redirect_uri' => $this->data['redirectUri'],
+                'grant_type' => 'authorization_code',
+                'client_secret' => $provider['clientSecret']
+            );
+            $postResponse = json_decode($curl->post($provider['accessTokenUrl'], json_encode($params)), true);
+            $curl->close();
+        } catch (Exception $e) {
+            $curl->close();
+            RestoLogUtil::httpError($e->getCode(), $e->getMessage());
+        }
 
-        return $postResponse['access_token'];
+        if ( isset($postResponse['error']) ) {
+            RestoLogUtil::httpError(400, $postResponse['error']);
+        }
+        
+        return $postResponse['access_token'] ?? null;
     }
 
     /**
@@ -318,21 +318,22 @@ class Auth extends RestoAddOn
      */
     private function oauth2GetProfile($accessToken, $provider)
     {
-        $data = @file_get_contents($provider['peopleApiUrl'], false, stream_context_create(array(
-            'http' => array(
-                'method' => 'GET',
-                'header' => 'Authorization: Bearer ' . $accessToken . (isset($provider['forceJSON']) && $provider['forceJSON'] ? "\r\nx-li-format: json\r\n" : '')
-            ),
-            'ssl' => $this->options['ssl'] ?? array()
-        )));
 
-        if (!$data) {
-            RestoLogUtil::httpError(401, 'Unauthorized');
+        try {
+            $curl = new Curly();
+            $curl->setHeaders(array(
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'Authorization: Bearer ' . $accessToken . (isset($provider['forceJSON']) && $provider['forceJSON'] ? "\r\nx-li-format: json\r\n" : '')
+            ));
+            $profileResponse = json_decode($curl->get($provider['peopleApiUrl']), true);
+            $curl->close();
+        } catch (Exception $e) {
+            $curl->close();
+            RestoLogUtil::httpError($e->getCode(), $e->getMessage());
         }
 
-        $profileResponse = json_decode($data, true);
-
-        if (!isset($profileResponse)) {
+        if ( !isset($profileResponse) ) {
             RestoLogUtil::httpError(401, 'Unauthorized');
         }
 
