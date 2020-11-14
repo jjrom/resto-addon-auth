@@ -363,7 +363,7 @@ class Auth extends RestoAddOn
         try {
             (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile['email']));
         } catch (Exception $e) {
-
+            
             /*
              * User does not exist - create it
              */
@@ -413,7 +413,7 @@ class Auth extends RestoAddOn
 
         if (isset($profile['email'])) {
             try {
-                $user = new RestoUser(array('email' => $profile['email']), $this->context, true);
+                $user = new RestoUser(array('email' => strtolower($profile['email'])), $this->context, true);
             } catch (Exception $e) {
             }
         }
