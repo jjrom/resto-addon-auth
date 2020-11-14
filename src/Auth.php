@@ -48,31 +48,13 @@ class Auth extends RestoAddOn
     private $providersConfig = array(
 
         /*
-         *  {
-         *     "kind": "plus#personOpenIdConnect",
-         *     "gender": "male",
-         *     "sub": "110613268514751241292",
-         *     "name": "Jérôme Gasperi",
-         *     "given_name": "Jérôme",
-         *     "family_name": "Gasperi",
-         *     "profile": "https://plus.google.com/110613268514751241292",
-         *     "picture": "https://lh4.googleusercontent.com/-b2ZwDfR874M/AAAAAAAAAAI/AAAAAAAAAv4/qlnh8V_Y8zA/photo.jpg?sz=50",
-         *     "email": "jerome.gasperi@gmail.com",
-         *     "email_verified": "true",
-         *     "locale": "fr"
-         *   }
+         * Google
          */
         'google' => array(
             'externalidpKey' => 'google',
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://accounts.google.com/o/oauth2/token',
-            'peopleApiUrl' => 'https://www.googleapis.com/plus/v1/people/me/openIdConnect',
-            'mapping' => array(
-                'email' => 'email',
-                'firstname' => 'given_name',
-                'lastname' => 'family_name',
-                'picture' => 'picture'
-            ),
+            'peopleApiUrl' => 'https://people.googleapis.com/v1/people/me?personFields=emailAddresses,names,nicknames,photos',
             'forceCreation' => true
         ),
 
@@ -230,10 +212,10 @@ class Auth extends RestoAddOn
          */
         switch ($provider['protocol']) {
             case 'oauth2':
-                $profile = $this->oauth2GetProfile($token, $provider);
+                $profile = $this->convertProfile($this->oauth2GetProfile($token, $provider), $provider['externalidpKey'] ?? 'unknown');
                 break;
             case 'jwt':
-                $profile = $this->jwtGetProfile($token, $provider);
+                $profile = $this->convertProfile($this->jwtGetProfile($token, $provider), $provider['externalidpKey'] ?? 'unknown');
                 break;
             default:
                 RestoLogUtil::httpError(400, 'Unknown sso protocol for issuer "' . $issuerId . '"');
@@ -263,12 +245,12 @@ class Auth extends RestoAddOn
         /*
          * Step 2. Get oauth profile
          */
-        $profile = $this->oauth2GetProfile($accessToken, $provider);
+        $profile = $this->convertProfile($this->oauth2GetProfile($accessToken, $provider), $provider['externalidpKey'] ?? 'unknown');
         
         /*
          * Insert user in resto database if needed
          */
-        $this->createUserInDatabase($profile, $provider);
+        $this->createUserInDatabase($profile);
 
         return $this->tokenAndProfile($profile, $provider);
     }
@@ -374,19 +356,18 @@ class Auth extends RestoAddOn
      * Insert user into resto database if needed
      *
      * @param array $profile
-     * @param array $provider
      * @throws Exception
      */
-    private function createUserInDatabase($profile, $provider)
+    private function createUserInDatabase($profile)
     {
         try {
-            (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile[$this->getEmailKey($provider)]));
+            (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile['email']));
         } catch (Exception $e) {
 
             /*
              * User does not exist - create it
              */
-            return $this->storeUser($profile, $provider);
+            return $this->storeUser($profile);
         }
 
         return false;
@@ -429,11 +410,10 @@ class Auth extends RestoAddOn
      */
     private function tokenAndProfile($profile, $provider)
     {
-        $emailKey = $this->getEmailKey($provider);
 
-        if (isset($profile[$emailKey])) {
+        if (isset($profile['email'])) {
             try {
-                $user = new RestoUser(array('email' => $profile[$emailKey]), $this->context, true);
+                $user = new RestoUser(array('email' => $profile['email']), $this->context, true);
             } catch (Exception $e) {
             }
         }
@@ -448,7 +428,7 @@ class Auth extends RestoAddOn
 
         // User does not exist => Special case - create it
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
-            $restoProfile = $this->storeUser($profile, $provider);
+            $restoProfile = $this->storeUser($profile);
             return array(
                 'token' => $this->context->createRJWT($restoProfile['id']),
                 'profile' => $restoProfile
@@ -459,30 +439,16 @@ class Auth extends RestoAddOn
     }
 
     /**
-     * Get provider uidKey
-     *
-     * @param array $provider
-     * @return string
-     */
-    private function getEmailKey($provider)
-    {
-        foreach ($provider['mapping'] as $key => $value) {
-            if ($key === 'email') {
-                return $value;
-            }
-        }
-        return 'email';
-    }
-
-    /**
      * Store user in database
      *
      * @param  array $profile
      * @param  array $provider
      * @return array
      */
-    private function storeUser($profile, $provider)
+    private function storeUser($profile)
     {
+
+        /*
         $restoProfile = array();
 
         // Initialize externalidp
@@ -511,10 +477,102 @@ class Auth extends RestoAddOn
 
         // Encode externalidp
         $restoProfile['externalidp'] = json_encode($externalidp, JSON_UNESCAPED_SLASHES);
-
-        return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($restoProfile, array(
+        */
+        return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($profile, array(
             'activated' => 1,
             'validatedby' => $this->context->core['userAutoValidation'] ? 'auto' : null
         )), $this->context->core['storageInfo']);
     }
+
+    /**
+     * Convert profile from provider to resto profile
+     * 
+     * @param {Array} $profile
+     * @param {string} $providerName
+     */
+    private function convertProfile($profile, $providerName)
+    {
+        switch ($providerName) {
+
+            case 'google':
+                return $this->convertGoogle($profile);
+
+            case 'facebook':
+                return $this->convertFacebook($profile);
+
+            default:
+                return $profile;
+        }
+
+    }
+
+    /**
+     * Return resto profile from google profile
+     * 
+     * {
+     *      "resourceName": "people/110613268514751241292",
+     *      "names":[
+     *          {
+     *              "displayName":"Jérôme Gasperi",
+     *              "familyName":"Gasperi",
+     *              "givenName":"Jérôme",
+     *              "displayNameLastFirst":"Gasperi, Jérôme",
+     *              "unstructuredName":"Jérôme Gasperi"
+     *          }
+     *      ],
+     *      "nicknames":[
+     *          {
+     *              "value":"jrom",
+     *              "type":"ALTERNATE_NAME"
+     *          }
+     *      ],
+     *      "photos":[
+     *          {
+     *              "url":"https://lh3.googleusercontent.com/a-/AOh14GgIJitSkG_3bc-dHO3O2o-j7Zs5F0mJdH4PNjJRrA=s100"
+     *          }
+     *      ],
+     *      "emailAddresses":[
+     *          {
+     *              "metadata":{
+     *                  "source":{
+     *                      "id":110613268514751241292
+     *                  }
+     *              }
+     *              "value": "Jerome.Gasperi@gmail.com"
+     *          }
+     *      ]
+     *  }
+     * 
+     * @param {Array} $profile
+     * @return {Array}
+     */
+    private function convertGoogle($profile)
+    {
+
+        $restoProfile = array(
+            'email' => isset($profile['emailAddresses']) &&  isset($profile['emailAddresses'][0]) ? $profile['emailAddresses'][0]['value'] : null,
+            'firstname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['givenName'] : null,
+            'lastname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['familyName'] : null,
+            'name' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['displayName'] : null,
+            'picture' => isset($profile['photos']) &&  isset($profile['photos'][0]) ? $profile['photos'][0]['url'] : null,
+            'externalidp' => array(
+                'google' => $profile
+            )
+        );
+
+        return $restoProfile;
+
+    }
+
+    /**
+     * Convert facebook profile to resto profile
+     * 
+     * @param {Array} $profile
+     * @return {Array}
+     */
+    private function convertFacebook($profile)
+    {
+        return $profile;
+    }
+
 }
