@@ -607,7 +607,10 @@ class Auth extends RestoAddOn
     /**
      * Get providers from input string $str
      * Format of $str is
-     *  providerId1:clientId1:clientSecret1|providerId2:clientId2:clientSecret2|...etc...
+     * 
+     *  providerId1|clientId1|clientSecret1;providerId2|clientId2|clientSecret2;...etc...
+     * 
+     * @param {String} $str
      */
     private function getProviders($str)
     {
@@ -617,12 +620,12 @@ class Auth extends RestoAddOn
             return $providers;
         }
 
-        $arr = explode('|', $str);
+        $arr = explode(';', $str);
         for ($i = 0, $ii = count($arr); $i < $ii; $i++) {
-            $split = explode(':', $arr[$i]);
-            $providers[$split[0]] = array(
-                'clientId' => $split[1],
-                'clientSecret' => $split[2]
+            $split = explode('|', $arr[$i]);
+            $providers[trim($split[0])] = array(
+                'clientId' => trim($split[1]),
+                'clientSecret' => trim($split[2])
             );
         }
 
