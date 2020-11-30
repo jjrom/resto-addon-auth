@@ -138,6 +138,17 @@ class Auth extends RestoAddOn
                 'lastname' => 'last_name'
             ),
             'forceCreation' => true
+        ),
+
+        /*
+         * Theia
+         */
+        'theia' => array(
+            'externalidpKey' => 'theia',
+            'protocol' => 'oauth2',
+            'accessTokenUrl' => 'https://sso.theia-land.fr/oauth2/token',
+            'peopleApiUrl' => 'https://sso.theia-land.fr/oauth2/userinfo?schema=openid',
+            'forceCreation' => true
         )
 
     );
@@ -382,20 +393,24 @@ class Auth extends RestoAddOn
     {
 
         /*
+         * Get providers from input ADDON_AUTH_PROVIDERS
+         */
+        $providers = $this->getProviders($this->options['providers'] ?? null);
+
+        /*
          * No provider => exit
          */
-        if ( !isset($this->options['providers']) || !isset($this->options['providers'][$issuerId])) {
+        if ( !isset($providers[$issuerId])) {
             RestoLogUtil::httpError(400, 'No configuration found for issuer "' . $issuerId . '"');
         }
 
-       
         /*
          * Search for known providers first
          */
         if (isset($this->providersConfig[$issuerId])) {
-            $provider = array_merge($this->providersConfig[$issuerId], $this->options['providers'][$issuerId]);
+            $provider = array_merge($this->providersConfig[$issuerId], $providers[$issuerId]);
         } else {
-            $provider = $this->options['providers'][$issuerId];
+            $provider = $providers[$issuerId];
         }
        
         return $provider;
@@ -500,6 +515,9 @@ class Auth extends RestoAddOn
             case 'facebook':
                 return $this->convertFacebook($profile);
 
+            case 'theia':
+                return $this->convertTheia($profile);
+
             default:
                 return $profile;
         }
@@ -575,4 +593,40 @@ class Auth extends RestoAddOn
         return $profile;
     }
 
+    /**
+     * Convert theia profile to resto profile
+     * 
+     * @param {Array} $profile
+     * @return {Array}
+     */
+    private function convertTheia($profile)
+    {
+        return $profile;
+    }
+
+    /**
+     * Get providers from input string $str
+     * Format of $str is
+     *  providerId1:clientId1:clientSecret1|providerId2:clientId2:clientSecret2|...etc...
+     */
+    private function getProviders($str)
+    {
+        $providers = array();
+
+        if ( !isset($str) ) {
+            return $providers;
+        }
+
+        $arr = explode('|', $str);
+        for ($i = 0, $ii = count($arr); $i < $ii; $i++) {
+            $split = explode(':', $arr[$i]);
+            $providers[$split[0]] = array(
+                'clientId' => $split[1],
+                'clientSecret' => $split[2]
+            );
+        }
+
+        return $providers;
+
+    }
 }
