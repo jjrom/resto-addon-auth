@@ -35,7 +35,7 @@ class Auth extends RestoAddOn
     /**
      * Add-on version
      */
-    public $version = '1.0';
+    public $version = '1.0.1';
 
     /*
      * Data
@@ -148,6 +148,7 @@ class Auth extends RestoAddOn
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://sso.theia-land.fr/oauth2/token',
             'peopleApiUrl' => 'https://sso.theia-land.fr/oauth2/userinfo?schema=openid',
+            'useUrlEncoded' => true,
             'forceCreation' => true
         )
 
@@ -288,7 +289,17 @@ class Auth extends RestoAddOn
                 'grant_type' => 'authorization_code',
                 'client_secret' => $provider['clientSecret']
             );
-            $postResponse = json_decode($curl->post($provider['accessTokenUrl'], json_encode($params)), true);
+
+            if ( isset($provider['useUrlEncoded']) && $provider['useUrlEncoded'] ) {
+                $curl->setHeaders(array(
+                    'Content-Type: application/x-www-form-urlencoded'
+                ));
+                $postResponse = json_decode($curl->post($provider['accessTokenUrl'] . '?' . http_build_query($params), null), true);
+            }
+            else {
+                $postResponse = json_decode($curl->post($provider['accessTokenUrl'], json_encode($params)), true);
+            }
+            
             $curl->close();
         } catch (Exception $e) {
             $curl->close();
@@ -567,7 +578,7 @@ class Auth extends RestoAddOn
     private function convertGoogle($profile)
     {
 
-        $restoProfile = array(
+        return array(
             'email' => isset($profile['emailAddresses']) &&  isset($profile['emailAddresses'][0]) ? $profile['emailAddresses'][0]['value'] : null,
             'firstname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['givenName'] : null,
             'lastname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['familyName'] : null,
@@ -577,8 +588,6 @@ class Auth extends RestoAddOn
                 'google' => $profile
             )
         );
-
-        return $restoProfile;
 
     }
 
@@ -596,12 +605,41 @@ class Auth extends RestoAddOn
     /**
      * Convert theia profile to resto profile
      * 
+     *  {
+     *       "http://theia.org/claims/emailaddress": "jerome.gasperi@gmail.com",
+     *       "http://theia.org/claims/givenname": "Jérôme",
+     *       "http://theia.org/claims/lastname": "Gasperi",
+     *       "http://theia.org/claims/organization": "Centre National d'Etudes Spatiales (CNES) - Projet Pôle Thématique Surfaces Continentales (THEIA)",
+     *       "http://theia.org/claims/function": "Senior Expert",
+     *       "http://theia.org/claims/type": "person",
+     *       "http://theia.org/claims/telephone": "+33561282523",
+     *       "http://theia.org/claims/streetaddress": "18 avenue Edouard Belin\r\n31400 Toulouse\r\nFrance",
+     *       "http://theia.org/claims/source": "theia",
+     *       "http://theia.org/claims/country": "FR",
+     *       "http://theia.org/claims/ignkey": "",
+     *       "http://theia.org/claims/ignauthentication": "",
+     *       "http://theia.org/claims/role": "Internal/admin,Application/resto.mapshup.com,Internal/identity,Internal/everyone,Internal/oauth_admin,Application/sparkindata.com",
+     *       "http://theia.org/claims/regDate": 1426240519617,
+     *       "http://theia.org/claims/foreignauthorization": "false"
+     *   }
+     *
      * @param {Array} $profile
      * @return {Array}
      */
     private function convertTheia($profile)
     {
-        return $profile;
+
+        return array(
+            'email' => $profile['http://theia.org/claims/emailaddress'] ?? null,
+            'firstname' => $profile['http://theia.org/claims/givenname'] ?? null,
+            'lastname' => $profile['http://theia.org/claims/lastname'] ?? null,
+            'country' => $profile['http://theia.org/claims/country'] ?? null,
+            'organization' => $profile['http://theia.org/claims/organization'] ?? null,
+            'externalidp' => array(
+                'theia' => $profile
+            )
+        );
+
     }
 
     /**
@@ -632,4 +670,5 @@ class Auth extends RestoAddOn
         return $providers;
 
     }
+
 }
