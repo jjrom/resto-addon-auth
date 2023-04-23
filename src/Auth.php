@@ -35,7 +35,7 @@ class Auth extends RestoAddOn
     /**
      * Add-on version
      */
-    public $version = '1.0.1';
+    public $version = '1.0.2';
 
     /*
      * Data
@@ -447,7 +447,7 @@ class Auth extends RestoAddOn
         // User exists => return JWT
         if (isset($user) && isset($user->profile['id'])) {
             return array(
-                'token' => $this->context->createRJWT($user->profile['id']),
+                'token' => $this->context->createRJWT($user->profile['id'], $this->context->core['tokenDuration']),
                 'profile' => $user->profile
             );
         }
@@ -456,7 +456,7 @@ class Auth extends RestoAddOn
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
             $restoProfile = $this->storeUser($profile);
             return array(
-                'token' => $this->context->createRJWT($restoProfile['id']),
+                'token' => $this->context->createRJWT($restoProfile['id'], $this->context->core['tokenDuration']),
                 'profile' => $restoProfile
             );
         }
