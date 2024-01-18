@@ -50,7 +50,6 @@ class Auth extends RestoAddOn
          * Google
          */
         'google' => array(
-            'externalidpKey' => 'google',
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://accounts.google.com/o/oauth2/token',
             'peopleApiUrl' => 'https://people.googleapis.com/v1/people/me?personFields=emailAddresses,names,nicknames,photos',
@@ -80,7 +79,6 @@ class Auth extends RestoAddOn
          *  }
          */
         'googlejwt' => array(
-            'externalidpKey' => 'google',
             'protocol' => 'jwt',
             'validationUrl' => 'https://www.googleapis.com/oauth2/v3/tokeninfo?id_token=',
             'checkProperty' => 'sub',
@@ -106,7 +104,6 @@ class Auth extends RestoAddOn
          *
          */
         'linkedin' => array(
-            'externalidpKey' => 'linkedin',
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://www.linkedin.com/uas/oauth2/accessToken',
             'peopleApiUrl' => 'https://api.linkedin.com/v1/people/~:(id,first-name,last-name,email-address,picture-url)',
@@ -127,7 +124,6 @@ class Auth extends RestoAddOn
          *
          */
         'facebook' => array(
-            'externalidpKey' => 'facebook',
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://graph.facebook.com/oauth/access_token',
             'peopleApiUrl' => 'https://graph.facebook.com/me/?fields=email,first_name,last_name,id',
@@ -143,7 +139,6 @@ class Auth extends RestoAddOn
          * Theia
          */
         'theia' => array(
-            'externalidpKey' => 'theia',
             'protocol' => 'oauth2',
             'accessTokenUrl' => 'https://sso.theia-land.fr/oauth2/token',
             'peopleApiUrl' => 'https://sso.theia-land.fr/oauth2/userinfo?schema=openid',
@@ -154,7 +149,6 @@ class Auth extends RestoAddOn
          * EDITO
          */
         'edito' => array(
-            'externalidpKey' => 'edito',
             'protocol' => 'oauth2',
             'useUrlEncoded' => true,
             'forceCreation' => true
@@ -231,10 +225,10 @@ class Auth extends RestoAddOn
          */
         switch ($provider['protocol']) {
             case 'oauth2':
-                $profile = $this->convertProfile($this->oauth2GetProfile($token, $provider), $provider['externalidpKey'] ?? 'unknown');
+                $profile = $this->convertProfile($this->oauth2GetProfile($token, $provider), $provider);
                 break;
             case 'jwt':
-                $profile = $this->convertProfile($this->jwtGetProfile($token, $provider), $provider['externalidpKey'] ?? 'unknown');
+                $profile = $this->convertProfile($this->jwtGetProfile($token, $provider), $provider);
                 break;
             default:
                 RestoLogUtil::httpError(400, 'Unknown sso protocol for issuer "' . $issuerId . '"');
@@ -264,7 +258,7 @@ class Auth extends RestoAddOn
         /*
          * Step 2. Get oauth profile
          */
-        $profile = $this->convertProfile($this->oauth2GetProfile($accessToken, $provider), $provider['externalidpKey'] ?? 'unknown');
+        $profile = $this->convertProfile($this->oauth2GetProfile($accessToken, $provider), $provider);
 
         /*
          * Insert user in resto database if needed
@@ -431,6 +425,13 @@ class Auth extends RestoAddOn
             $provider = $providers[$issuerId];
         }
 
+        /*
+         * Set default protocol to oauth2 if not set
+         */
+        if ( !isset($provider['protocol']) ) {
+            $provider['protocol'] = 'oauth2';
+        }
+
         return $provider;
     }
 
@@ -488,11 +489,11 @@ class Auth extends RestoAddOn
      * Convert profile from provider to resto profile
      *
      * @param {Array} $profile
-     * @param {string} $providerName
+     * @param {array} $provider
      */
-    private function convertProfile($profile, $providerName)
+    private function convertProfile($profile, $provider)
     {
-        switch ($providerName) {
+        switch ($provider['id']) {
 
             case 'google':
                 return $this->convertGoogle($profile);
@@ -507,7 +508,7 @@ class Auth extends RestoAddOn
                 return $this->convertEdito($profile);
                 
             default:
-                return $profile;
+                return $this->convertGeneric($provider, $profile);
         }
 
     }
@@ -625,8 +626,6 @@ class Auth extends RestoAddOn
             'email' => $profile['email'] ?? null,
             'firstname' => $profile['given_name'] ?? null,
             'lastname' => $profile['family_name'] ?? null,
-            'country' => null,
-            'organization' => null,
             'externalidp' => array(
                 'edito' => $profile
             )
@@ -634,11 +633,50 @@ class Auth extends RestoAddOn
     }
 
     /**
+     * Convert profile from input provider mapping, leaves untouched otherwise
+     * 
+     * @param array $provider
+     * @param array $profile
+     */
+    private function convertGeneric($provider, $profile)
+    {
+
+        if ( !isset($provider['mapping']) ) {
+            return $profile;
+        }
+
+        $convertedProfile = array(
+            'externalidp' => array(
+                $provider['id'] => $profile
+            )
+        );
+
+        // Input mapping is "email=email,firstname=given_name,lastname=family_name"
+        $keyValues = explode(',', $provider['mapping']);
+        for ($i = 0, $ii = count($keyValues); $i < $ii; $i++) {
+            $split = explode('=', $keyValues[$i]);
+            if (count($split) == 2) {
+                $convertedProfile[$split[0]] = $split[1];
+            }
+        }
+
+        return $convertedProfile;
+
+    }
+
+    /**
      * Get providers from input string $str
      * Format of $str is
      *
-     *  providerId1|clientId1|clientSecret1;providerId2|clientId2|clientSecret2;...etc...
+     *  providerId1|clientId1|clientSecret1|(accessTokenUrl)|(peopleApiUrl)|(mapping);providerId2|clientId2|clientSecret2;...etc...
      *
+     * Where :
+     *   - parts in () are optionals
+     *   - mapping allows the conversion of properties names returned by the IdP to
+     *     resto names. It is a string like "email=xxx,firstname=yyyy,lastname=zzzz"
+     *     For instance, the mapping for theia oauth2 IdP would be :
+     *       "email=email,firstname=given_name,lastname=family_name"
+     * 
      * @param {String} $str
      */
     private function getProviders($str)
@@ -652,12 +690,17 @@ class Auth extends RestoAddOn
         $arr = explode(';', $str);
         for ($i = 0, $ii = count($arr); $i < $ii; $i++) {
             $split = explode('|', $arr[$i]);
-            $providers[trim($split[0])] = array(
-                'clientId' => trim($split[1]),
-                'clientSecret' => trim($split[2]),
-                'accessTokenUrl' => trim($split[3]),
-                'peopleApiUrl' => trim($split[4])
-            );
+            if (count($split) > 0) {
+                $id = trim($split[0]);
+                $providers[$id] = array(
+                    'id' => $id,
+                    'clientId' => trim($split[1]) || '',
+                    'clientSecret' => trim($split[2]) || '',
+                    'accessTokenUrl' => trim($split[3]) || null,
+                    'peopleApiUrl' => trim($split[4]) || null,
+                    'mapping' => trim($split[5]) || null
+                );
+            }
         }
 
         return $providers;
