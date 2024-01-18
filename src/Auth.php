@@ -31,7 +31,6 @@
  */
 class Auth extends RestoAddOn
 {
-
     /**
      * Add-on version
      */
@@ -150,6 +149,15 @@ class Auth extends RestoAddOn
             'peopleApiUrl' => 'https://sso.theia-land.fr/oauth2/userinfo?schema=openid',
             'useUrlEncoded' => true,
             'forceCreation' => true
+        ),
+        /*
+         * EDITO
+         */
+        'edito' => array(
+            'externalidpKey' => 'edito',
+            'protocol' => 'oauth2',
+            'useUrlEncoded' => true,
+            'forceCreation' => true
         )
 
     );
@@ -193,7 +201,7 @@ class Auth extends RestoAddOn
          * Get provider
          */
         $provider = $this->getProvider($params['issuerId']);
-        
+
         /*
          * Authenticate from input protocol
          */
@@ -202,7 +210,6 @@ class Auth extends RestoAddOn
                 return $this->oauth2($provider);
             default:
                 RestoLogUtil::httpError(400, 'Unknown sso protocol for issuer "' . $params['issuerId'] . '"');
-
         }
     }
 
@@ -258,7 +265,7 @@ class Auth extends RestoAddOn
          * Step 2. Get oauth profile
          */
         $profile = $this->convertProfile($this->oauth2GetProfile($accessToken, $provider), $provider['externalidpKey'] ?? 'unknown');
-        
+
         /*
          * Insert user in resto database if needed
          */
@@ -292,14 +299,14 @@ class Auth extends RestoAddOn
 
             if ( isset($provider['useUrlEncoded']) && $provider['useUrlEncoded'] ) {
                 $curl->setHeaders(array(
-                    'Content-Type: application/x-www-form-urlencoded'
+                    'Content-Type:application/x-www-form-urlencoded'
                 ));
-                $postResponse = json_decode($curl->post($provider['accessTokenUrl'] . '?' . http_build_query($params), null), true);
+                $postResponse = json_decode($curl->post($provider['accessTokenUrl'] , http_build_query($params)), true);
             }
             else {
                 $postResponse = json_decode($curl->post($provider['accessTokenUrl'], json_encode($params)), true);
             }
-            
+
             $curl->close();
         } catch (Exception $e) {
             $curl->close();
@@ -309,7 +316,7 @@ class Auth extends RestoAddOn
         if ( isset($postResponse['error']) ) {
             RestoLogUtil::httpError(400, $postResponse['error']);
         }
-        
+
         return $postResponse['access_token'] ?? null;
     }
 
@@ -385,7 +392,7 @@ class Auth extends RestoAddOn
         try {
             (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile['email']));
         } catch (Exception $e) {
-            
+
             /*
              * User does not exist - create it
              */
@@ -423,7 +430,7 @@ class Auth extends RestoAddOn
         } else {
             $provider = $providers[$issuerId];
         }
-       
+
         return $provider;
     }
 
@@ -436,18 +443,16 @@ class Auth extends RestoAddOn
      */
     private function tokenAndProfile($profile, $provider)
     {
-
         if (isset($profile['email'])) {
             try {
                 $user = new RestoUser(array('email' => strtolower($profile['email'])), $this->context, true);
-            } catch (Exception $e) {
-            }
+            } catch (Exception $e) {}
         }
 
         // User exists => return JWT
         if (isset($user) && isset($user->profile['id'])) {
             return array(
-                'token' => $this->context->createRJWT($user->profile['id'], $this->context->core['tokenDuration']),
+                'token' => $this->context->createRJWT($user->profile['id'], $this->context->core['tokenDuration'], null),
                 'profile' => $user->profile
             );
         }
@@ -456,7 +461,7 @@ class Auth extends RestoAddOn
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
             $restoProfile = $this->storeUser($profile);
             return array(
-                'token' => $this->context->createRJWT($restoProfile['id'], $this->context->core['tokenDuration']),
+                'token' => $this->context->createRJWT($restoProfile['id'], $this->context->core['tokenDuration'], null),
                 'profile' => $restoProfile
             );
         }
@@ -473,37 +478,6 @@ class Auth extends RestoAddOn
      */
     private function storeUser($profile)
     {
-
-        /*
-        $restoProfile = array();
-
-        // Initialize externalidp
-        $externalidp = array();
-        $externalidp[$provider['externalidpKey']] = $profile;
-
-        foreach ($provider['mapping'] as $key => $value) {
-            if (isset($profile[$value])) {
-                $restoProfile[$key] = $key === 'email' ? strtolower($profile[$value]) : $profile[$value];
-            }
-        }
-
-        // Facebook special case (picture is not set by default)
-        if ($provider['externalidpKey'] === 'facebook') {
-            $restoProfile['picture'] = 'https://graph.facebook.com/' . $profile['id'] . '/picture?type=large';
-            $externalidp[$provider['externalidpKey']]['picture'] = $restoProfile['picture'];
-
-            // Special case where facebook does not provide an email adress - create it from facebook id
-            if (!isset($restoProfile['email'])) {
-                $restoProfile['email'] = $profile['id'] . '@facebook.com';
-            }
-        }
-
-        // Compute default name from "firstname lastname"
-        $restoProfile['name'] = trim(join(' ', array(ucfirst($restoProfile['firstname'] ?? ''), ucfirst($restoProfile['lastname'] ?? ''))));
-
-        // Encode externalidp
-        $restoProfile['externalidp'] = json_encode($externalidp, JSON_UNESCAPED_SLASHES);
-        */
         return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($profile, array(
             'activated' => 1,
             'validatedby' => $this->context->core['userAutoValidation'] ? 'auto' : null
@@ -512,7 +486,7 @@ class Auth extends RestoAddOn
 
     /**
      * Convert profile from provider to resto profile
-     * 
+     *
      * @param {Array} $profile
      * @param {string} $providerName
      */
@@ -529,6 +503,9 @@ class Auth extends RestoAddOn
             case 'theia':
                 return $this->convertTheia($profile);
 
+            case 'edito':
+                return $this->convertEdito($profile);
+                
             default:
                 return $profile;
         }
@@ -537,7 +514,7 @@ class Auth extends RestoAddOn
 
     /**
      * Return resto profile from google profile
-     * 
+     *
      * {
      *      "resourceName": "people/110613268514751241292",
      *      "names":[
@@ -571,7 +548,7 @@ class Auth extends RestoAddOn
      *          }
      *      ]
      *  }
-     * 
+     *
      * @param {Array} $profile
      * @return {Array}
      */
@@ -593,7 +570,7 @@ class Auth extends RestoAddOn
 
     /**
      * Convert facebook profile to resto profile
-     * 
+     *
      * @param {Array} $profile
      * @return {Array}
      */
@@ -604,7 +581,7 @@ class Auth extends RestoAddOn
 
     /**
      * Convert theia profile to resto profile
-     * 
+     *
      *  {
      *       "http://theia.org/claims/emailaddress": "jerome.gasperi@gmail.com",
      *       "http://theia.org/claims/givenname": "Jérôme",
@@ -642,12 +619,26 @@ class Auth extends RestoAddOn
 
     }
 
+    private function convertEdito($profile)
+    {
+        return array(
+            'email' => $profile['email'] ?? null,
+            'firstname' => $profile['given_name'] ?? null,
+            'lastname' => $profile['family_name'] ?? null,
+            'country' => null,
+            'organization' => null,
+            'externalidp' => array(
+                'edito' => $profile
+            )
+        );
+    }
+
     /**
      * Get providers from input string $str
      * Format of $str is
-     * 
+     *
      *  providerId1|clientId1|clientSecret1;providerId2|clientId2|clientSecret2;...etc...
-     * 
+     *
      * @param {String} $str
      */
     private function getProviders($str)
@@ -663,7 +654,9 @@ class Auth extends RestoAddOn
             $split = explode('|', $arr[$i]);
             $providers[trim($split[0])] = array(
                 'clientId' => trim($split[1]),
-                'clientSecret' => trim($split[2])
+                'clientSecret' => trim($split[2]),
+                'accessTokenUrl' => trim($split[3]),
+                'peopleApiUrl' => trim($split[4])
             );
         }
 
