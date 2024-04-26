@@ -34,7 +34,7 @@ class Auth extends RestoAddOn
     /**
      * Add-on version
      */
-    public $version = '1.0.2';
+    public $version = '1.0.3';
 
     /*
      * Data
@@ -694,11 +694,11 @@ class Auth extends RestoAddOn
                 $id = trim($split[0]);
                 $providers[$id] = array(
                     'id' => $id,
-                    'clientId' => trim($split[1]) || '',
-                    'clientSecret' => trim($split[2]) || '',
-                    'accessTokenUrl' => trim($split[3]) || null,
-                    'peopleApiUrl' => trim($split[4]) || null,
-                    'mapping' => trim($split[5]) || null
+                    'clientId' => trim($split[1]) ?? '',
+                    'clientSecret' => trim($split[2]) ?? '',
+                    'accessTokenUrl' => trim($split[3]) ?? null,
+                    'peopleApiUrl' => trim($split[4]) ?? null,
+                    'mapping' => trim($split[5]) ?? null
                 );
             }
         }
