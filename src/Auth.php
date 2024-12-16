@@ -862,7 +862,7 @@ class Auth extends RestoAddOn
 
         // No unique ? Use random
         if( !$isAvailable ){
-            return $firstname;
+            return $firstname . $lastname . random_int(1, 9999);
         }
         return $availableUserName;
     }
