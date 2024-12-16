@@ -34,7 +34,7 @@ class Auth extends RestoAddOn
     /**
      * Add-on version
      */
-    public $version = '1.0.3';
+    public $version = '1.1.0';
 
     /*
      * Data
@@ -177,10 +177,7 @@ class Auth extends RestoAddOn
      */
     public function authenticate($params, $data = array())
     {
-        if (!$this->context) {
-            RestoLogUtil::httpError(500, 'Invalid Context');
-        }
-
+       
         // Authentication issuer is mandatory
         if (!isset($params) || !isset($params['issuerId'])) {
             RestoLogUtil::httpError(400, 'Missing issuerId');
@@ -190,6 +187,53 @@ class Auth extends RestoAddOn
          * Set POST data from resto
          */
         $this->data = $data;
+
+        if (!isset($this->data['code']) || !isset($this->data['redirectUri'])) {
+            error_log("No code and redirect uri provided");
+            RestoLogUtil::httpError(400);
+        }
+
+        /*
+         * Get provider
+         */
+        $provider = $this->getProvider($params['issuerId']);
+
+        /*
+         * Authenticate from input protocol
+         */
+        switch ($provider['protocol']) {
+            case 'oauth2':
+                return $this->oauth2($provider);
+            default:
+                RestoLogUtil::httpError(400, 'Unknown sso protocol for issuer "' . $params['issuerId'] . '"');
+        }
+    }
+
+    /**
+     * Authenticate using idp external token
+     * 
+     * @param array $params : route parameters
+     * @param array $data : POST or PUT parameters
+     *
+     * @return string
+     */
+    public function authenticateWithToken($params, $data = array())
+    {
+        
+        // Authentication issuer is mandatory
+        if ( !isset($params) || !isset($params['issuerId']) )  {
+            RestoLogUtil::httpError(400, 'Missing input issuerId');
+        }
+
+        /*
+         * Set POST data from resto
+         */
+        $this->data = $data;
+
+        if (!(isset($this->data['token']))) {
+            error_log("No token provided");
+            RestoLogUtil::httpError(400, 'Missing input token');
+        }
 
         /*
          * Get provider
@@ -241,6 +285,55 @@ class Auth extends RestoAddOn
     }
 
     /**
+     * Validate an OpenId Connect token
+     * 
+     * @param array $provider
+     */
+    private function validateOpenIDToken($provider) {
+
+        $token = $this->data['token'];
+        $audience = $provider['clientId']; // TODO - verify Token
+
+        if ( empty($provider['openidConfigurationUrl']) ) {
+            RestoLogUtil::httpError(400, 'Missing openIdConfigurationUrl in provider configuration');
+        }
+        $openidConfigurationUrl = $provider['openidConfigurationUrl'];
+        $openidConfiguration = json_decode(file_get_contents($openidConfigurationUrl), true);
+
+        // Extract the key URL
+        $jwksUri = $openidConfiguration['jwks_uri'];
+
+        // Fetch the JSON Web Key Set (JWKS)
+        $jwks = json_decode(file_get_contents($jwksUri), true);
+
+        // Decode and validate the token
+        $parts = explode('.', $token);
+        $header = json_decode(base64_decode($parts[0]), true);
+        // Find the correct key to verify the token
+        $keys = array_filter($jwks['keys'], function ($key) use ($header) {
+            return $key['kid'] == $header['kid'];
+        });
+        if (empty($keys)) {
+            throw new Exception('Unable to find key to verify token');
+        }
+
+        foreach ($keys as $key) {
+            // Get the algorithm from the token header
+            $publicKey = "-----BEGIN CERTIFICATE-----\n" . $key['x5c'][0] . "\n-----END CERTIFICATE-----\n";
+            try {
+                $decoded = JWT::decode($token, $publicKey, ['RS512']);
+                return $token;
+            } catch (Exception $e) {
+                error_log($e);
+                RestoLogUtil::httpError(401);
+            }
+        }
+        error_log("cannot validate token\n");
+        throw new Exception('Token verification failed');
+    }
+
+
+    /**
      * Authenticate with generic Oauth2 API
      *
      * @param array $provider
@@ -253,8 +346,13 @@ class Auth extends RestoAddOn
         /*
          * Step 1. Get access token
          */
-        $accessToken = $this->oauth2GetAccessToken($provider);
-
+        if (isset($this->data['code']) && isset($this->data['redirectUri'])){
+            $accessToken = $this->oauth2GetAccessToken($provider);
+        }
+        elseif (isset($this->data['token']) ){
+            $accessToken = $this->validateOpenIDToken($provider);
+        }
+        
         /*
          * Step 2. Get oauth profile
          */
@@ -277,19 +375,17 @@ class Auth extends RestoAddOn
      */
     private function oauth2GetAccessToken($provider)
     {
-        if (!isset($this->data['code']) || !isset($this->data['redirectUri'])) {
-            RestoLogUtil::httpError(400);
-        }
+
+        $params = array(
+            'code' => $this->data['code'],
+            'client_id' => $provider['clientId'],
+            'redirect_uri' => $this->data['redirectUri'],
+            'grant_type' => 'authorization_code',
+            'client_secret' => $provider['clientSecret']
+        );
 
         try {
             $curl = new Curly();
-            $params = array(
-                'code' => $this->data['code'],
-                'client_id' => $provider['clientId'],
-                'redirect_uri' => $this->data['redirectUri'],
-                'grant_type' => 'authorization_code',
-                'client_secret' => $provider['clientSecret']
-            );
 
             if ( isset($provider['useUrlEncoded']) && $provider['useUrlEncoded'] ) {
                 $curl->setHeaders(array(
@@ -362,14 +458,14 @@ class Auth extends RestoAddOn
         )));
 
         if (!$data) {
-            RestoLogUtil::httpError(401, 'Unauthorized');
+            RestoLogUtil::httpError(401);
         }
 
         $profileResponse = json_decode($data, true);
 
         // 'checkProperty' must be present otherwise there is an error
         if (!isset($profileResponse) || !isset($profileResponse[$provider['checkProperty']])) {
-            RestoLogUtil::httpError(401, 'Unauthorized');
+            RestoLogUtil::httpError(401);
         }
 
         return $profileResponse;
@@ -383,6 +479,7 @@ class Auth extends RestoAddOn
      */
     private function createUserInDatabase($profile)
     {
+
         try {
             (new UsersFunctions($this->context->dbDriver))->getUserProfile('email', strtolower($profile['email']));
         } catch (Exception $e) {
@@ -453,7 +550,7 @@ class Auth extends RestoAddOn
         // User exists => return JWT
         if (isset($user) && isset($user->profile['id'])) {
             return array(
-                'token' => $this->context->createRJWT($user->profile['id'], $this->context->core['tokenDuration'], null),
+                'token' => $this->context->createJWT($user->profile['id'], $this->context->core['tokenDuration'], null),
                 'profile' => $user->profile
             );
         }
@@ -462,7 +559,7 @@ class Auth extends RestoAddOn
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
             $restoProfile = $this->storeUser($profile);
             return array(
-                'token' => $this->context->createRJWT($restoProfile['id'], $this->context->core['tokenDuration'], null),
+                'token' => $this->context->createJWT($restoProfile['id'], $this->context->core['tokenDuration'], null),
                 'profile' => $restoProfile
             );
         }
@@ -479,10 +576,15 @@ class Auth extends RestoAddOn
      */
     private function storeUser($profile)
     {
+
+        // resto 9.3+ - a unique username is mandatory
+
         return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($profile, array(
+            'username' => $this->generateUsername($profile),
             'activated' => 1,
             'validatedby' => $this->context->core['userAutoValidation'] ? 'auto' : null
         )), $this->context->core['storageInfo']);
+
     }
 
     /**
@@ -668,7 +770,7 @@ class Auth extends RestoAddOn
      * Get providers from input string $str
      * Format of $str is
      *
-     *  providerId1|clientId1|clientSecret1|(accessTokenUrl)|(peopleApiUrl)|(mapping);providerId2|clientId2|clientSecret2;...etc...
+     *  providerId1|clientId1|clientSecret1|(accessTokenUrl)|(peopleApiUrl)|(openidConfigurationUrl)|(mapping);providerId2|clientId2|clientSecret2;...etc...
      *
      * Where :
      *   - parts in () are optionals
@@ -698,13 +800,82 @@ class Auth extends RestoAddOn
                     'clientSecret' => trim($split[2]) ?? '',
                     'accessTokenUrl' => trim($split[3]) ?? null,
                     'peopleApiUrl' => trim($split[4]) ?? null,
-                    'mapping' => trim($split[5]) ?? null
+                    'openidConfigurationUrl' => trim($split[5]) ?? null,
+                    'mapping' => trim($split[6]) ?? null
                 );
             }
         }
 
         return $providers;
 
+    }
+
+    /**
+     * Generate a unique username from profile
+     * (see https://stackoverflow.com/questions/43232989/how-to-generate-unique-username-php)
+     * 
+     * @param array $profile
+     * @return string 
+     */
+    private function generateUsername($profile)
+    {
+    
+        $firstname = strtolower($profile['firstname'] ?? str_replace(array('.', '-', '_'), '', explode('@', $profile['email'])[0]));
+        $lastname = strtolower($profile['lastname'] ?? 'doe');
+        $userNamesList = array();
+        $firstChar = str_split($firstname, 1)[0];
+        $firstTwoChar = str_split($firstname, 2)[0];
+
+        /**
+         * an array of numbers that may be used as suffix for the user names index 0 would be the year
+         * and index 1, 2 and 3 would be month, day and hour respectively.
+         */
+        $numSufix = explode('-', date('Y-m-d-H')); 
+
+        // create an array of nice possible user names from the first name and last name
+        array_push($userNamesList, 
+            $firstname,                 //john
+            $lastname,                  //doe
+            $firstname.$lastname,       //johndoe
+            $firstChar.$lastname,       //jdoe
+            $firstTwoChar.$lastname,    //jodoe,
+            $firstname.$numSufix[0],    //john2024
+            $firstname.$numSufix[1],    //john12 i.e the month of reg
+            $firstname.$numSufix[2],    //john16 i.e the day of reg
+            $firstname.$numSufix[3]     //john08 i.e the hour of day of reg
+        );
+
+        $isAvailable = false; //initialize available with false
+        $index = 0;
+        $maxIndex = count($userNamesList) - 1;
+
+        // loop through all the userNameList and find the one that is available
+        do {
+            $availableUserName = $userNamesList[$index];
+            $isAvailable = $this->usernameExists($availableUserName);
+            $limit =  $index >= $maxIndex;
+            $index += 1;
+            if ($limit) {
+                break;
+            }
+        } while ( !$isAvailable );
+
+        // No unique ? Use random
+        if( !$isAvailable ){
+            return $firstname;
+        }
+        return $availableUserName;
+    }
+
+    /**
+     * Check if username exists in database
+     * @param string $username
+     * @return boolean
+     */
+    private function usernameExists($username)
+    {
+        $results = $this->context->dbDriver->fetch($this->context->dbDriver->pQuery('SELECT id FROM ' . $this->context->dbDriver->commonSchema . '.user WHERE username=$1', array($username)));
+        return !empty($results);
     }
 
 }
