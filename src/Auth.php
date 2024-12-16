@@ -548,9 +548,9 @@ class Auth extends RestoAddOn
         }
 
         // User exists => return JWT
-        if (isset($user) && isset($user->profile['id'])) {
+        if (isset($user) && isset($user->profile['username'])) {
             return array(
-                'token' => $this->context->createJWT($user->profile['id'], $this->context->core['tokenDuration'], null),
+                'token' => $this->context->createJWT($user->profile['username'], $this->context->core['tokenDuration'], null),
                 'profile' => $user->profile
             );
         }
@@ -559,7 +559,7 @@ class Auth extends RestoAddOn
         if (isset($provider['forceCreation']) && $provider['forceCreation']) {
             $restoProfile = $this->storeUser($profile);
             return array(
-                'token' => $this->context->createJWT($restoProfile['id'], $this->context->core['tokenDuration'], null),
+                'token' => $this->context->createJWT($restoProfile['username'], $this->context->core['tokenDuration'], null),
                 'profile' => $restoProfile
             );
         }
