@@ -34,7 +34,7 @@ class Auth extends RestoAddOn
     /**
      * Add-on version
      */
-    public $version = '1.1.0';
+    public $version = '1.2.1';
 
     /*
      * Data
@@ -177,7 +177,7 @@ class Auth extends RestoAddOn
      */
     public function authenticate($params, $data = array())
     {
-       
+
         // Authentication issuer is mandatory
         if (!isset($params) || !isset($params['issuerId'])) {
             RestoLogUtil::httpError(400, 'Missing issuerId');
@@ -211,7 +211,7 @@ class Auth extends RestoAddOn
 
     /**
      * Authenticate using idp external token
-     * 
+     *
      * @param array $params : route parameters
      * @param array $data : POST or PUT parameters
      *
@@ -219,7 +219,7 @@ class Auth extends RestoAddOn
      */
     public function authenticateWithToken($params, $data = array())
     {
-        
+
         // Authentication issuer is mandatory
         if ( !isset($params) || !isset($params['issuerId']) )  {
             RestoLogUtil::httpError(400, 'Missing input issuerId');
@@ -286,7 +286,7 @@ class Auth extends RestoAddOn
 
     /**
      * Validate an OpenId Connect token
-     * 
+     *
      * @param array $provider
      */
     private function validateOpenIDToken($provider) {
@@ -352,7 +352,7 @@ class Auth extends RestoAddOn
         elseif (isset($this->data['token']) ){
             $accessToken = $this->validateOpenIDToken($provider);
         }
-        
+
         /*
          * Step 2. Get oauth profile
          */
@@ -576,9 +576,6 @@ class Auth extends RestoAddOn
      */
     private function storeUser($profile)
     {
-
-        // resto 9.3+ - a unique username is mandatory
-
         return (new UsersFunctions($this->context->dbDriver))->storeUserProfile(array_merge($profile, array(
             'username' => $this->generateUsername($profile),
             'activated' => 1,
@@ -608,7 +605,7 @@ class Auth extends RestoAddOn
 
             case 'edito':
                 return $this->convertEdito($profile);
-                
+
             default:
                 return $this->convertGeneric($provider, $profile);
         }
@@ -662,7 +659,7 @@ class Auth extends RestoAddOn
             'email' => isset($profile['emailAddresses']) &&  isset($profile['emailAddresses'][0]) ? $profile['emailAddresses'][0]['value'] : null,
             'firstname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['givenName'] : null,
             'lastname' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['familyName'] : null,
-            'name' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['displayName'] : null,
+            'username' => isset($profile['names']) &&  isset($profile['names'][0]) ? $profile['names'][0]['displayName'] : null,
             'picture' => isset($profile['photos']) &&  isset($profile['photos'][0]) ? $profile['photos'][0]['url'] : null,
             'externalidp' => array(
                 'google' => $profile
@@ -726,6 +723,7 @@ class Auth extends RestoAddOn
     {
         return array(
             'email' => $profile['email'] ?? null,
+            'username' => $profile['preferred_username'] ?? null,
             'firstname' => $profile['given_name'] ?? null,
             'lastname' => $profile['family_name'] ?? null,
             'externalidp' => array(
@@ -736,7 +734,7 @@ class Auth extends RestoAddOn
 
     /**
      * Convert profile from input provider mapping, leaves untouched otherwise
-     * 
+     *
      * @param array $provider
      * @param array $profile
      */
@@ -778,7 +776,7 @@ class Auth extends RestoAddOn
      *     resto names. It is a string like "email=xxx,firstname=yyyy,lastname=zzzz"
      *     For instance, the mapping for theia oauth2 IdP would be :
      *       "email=email,firstname=given_name,lastname=family_name"
-     * 
+     *
      * @param {String} $str
      */
     private function getProviders($str)
@@ -796,12 +794,12 @@ class Auth extends RestoAddOn
                 $id = trim($split[0]);
                 $providers[$id] = array(
                     'id' => $id,
-                    'clientId' => trim($split[1]) ?? '',
-                    'clientSecret' => trim($split[2]) ?? '',
-                    'accessTokenUrl' => trim($split[3]) ?? null,
-                    'peopleApiUrl' => trim($split[4]) ?? null,
-                    'openidConfigurationUrl' => trim($split[5]) ?? null,
-                    'mapping' => trim($split[6]) ?? null
+                    'clientId' => (isset($split[1]) ? trim($split[1]) : null) ?? '',
+                    'clientSecret' => (isset($split[2]) ? trim($split[2]) : null) ?? '',
+                    'accessTokenUrl' => (isset($split[3]) ? trim($split[3]) : null) ?? null,
+                    'peopleApiUrl' => (isset($split[4]) ? trim($split[4]) : null) ?? null,
+                    'openidConfigurationUrl' => (isset($split[5]) ? trim($split[5]) : null) ?? null,
+                    'mapping' => (isset($split[6]) ? trim($split[6]) : null) ?? null
                 );
             }
         }
@@ -813,36 +811,45 @@ class Auth extends RestoAddOn
     /**
      * Generate a unique username from profile
      * (see https://stackoverflow.com/questions/43232989/how-to-generate-unique-username-php)
-     * 
+     *
      * @param array $profile
-     * @return string 
+     * @return string
      */
     private function generateUsername($profile)
     {
-    
+
+        $username = $profile['username'] ?? null;
         $firstname = strtolower($profile['firstname'] ?? str_replace(array('.', '-', '_'), '', explode('@', $profile['email'])[0]));
         $lastname = strtolower($profile['lastname'] ?? 'doe');
-        $userNamesList = array();
-        $firstChar = str_split($firstname, 1)[0];
-        $firstTwoChar = str_split($firstname, 2)[0];
 
         /**
          * an array of numbers that may be used as suffix for the user names index 0 would be the year
          * and index 1, 2 and 3 would be month, day and hour respectively.
          */
-        $numSufix = explode('-', date('Y-m-d-H')); 
+        $numSufix = explode('-', date('Y-m-d-H'));
+
+        // username if set has preseance over everything
+        $userNamesList = isset($username) ? array(
+            $username,
+            $username.$numSufix[0],    //john2024
+            $username.$numSufix[1],    //john12 i.e the month of reg
+            $username.$numSufix[2],    //john16 i.e the day of reg
+            $username.$numSufix[3]     //john08 i.e the hour of day of reg
+        ) : array();
 
         // create an array of nice possible user names from the first name and last name
-        array_push($userNamesList, 
-            $firstname,                 //john
-            $lastname,                  //doe
-            $firstname.$lastname,       //johndoe
-            $firstChar.$lastname,       //jdoe
-            $firstTwoChar.$lastname,    //jodoe,
-            $firstname.$numSufix[0],    //john2024
-            $firstname.$numSufix[1],    //john12 i.e the month of reg
-            $firstname.$numSufix[2],    //john16 i.e the day of reg
-            $firstname.$numSufix[3]     //john08 i.e the hour of day of reg
+        array_push($userNamesList,
+            $firstname,                           //john
+            $lastname,                            //doe
+            $firstname.$lastname,                 //johndoe
+            $firstname.$numSufix[0],              //john2024
+            $firstname.$numSufix[1],              //john12 i.e the month of reg
+            $firstname.$numSufix[2],              //john16 i.e the day of reg
+            $firstname.$numSufix[3],              //john08 i.e the hour of day of reg
+            $firstname.$lastname.$numSufix[0],    //johndoe2024
+            $firstname.$lastname.$numSufix[1],    //johndoe12 i.e the month of reg
+            $firstname.$lastname.$numSufix[2],    //johndoe16 i.e the day of reg
+            $firstname.$lastname.$numSufix[3]     //johndoe08 i.e the hour of day of reg
         );
 
         $isAvailable = false; //initialize available with false
@@ -852,7 +859,7 @@ class Auth extends RestoAddOn
         // loop through all the userNameList and find the one that is available
         do {
             $availableUserName = $userNamesList[$index];
-            $isAvailable = $this->usernameExists($availableUserName);
+            $isAvailable = !$this->usernameExists($availableUserName);
             $limit =  $index >= $maxIndex;
             $index += 1;
             if ($limit) {
